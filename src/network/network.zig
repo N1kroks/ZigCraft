@@ -1,5 +1,4 @@
 pub const packet = @import("packet/packet.zig");
-pub const utils = @import("utils.zig");
 
 pub usingnamespace @import("connection_state.zig");
 

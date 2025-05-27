@@ -1,99 +1,76 @@
 const std = @import("std");
 
-const utils = @import("../utils.zig");
-const Packet = @import("packet.zig").Packet;
+const packet = @import("packet.zig");
 
 pub const C2SLoginStartPacket = struct {
     pub const PacketID = 0x00;
 
-    base: *Packet,
-
-    username: []const u8,
-    // TODO: Add UUID
+    username: packet.String,
 
     has_sig_data: bool,
     timestamp: ?i64,
-    public_key_length: ?i32,
-    public_key: ?[]const u8,
-    signature_length: ?i32,
-    signature: ?[]const u8,
+    public_key_length: ?packet.VarInt,
+    public_key: ?packet.ByteArray,
+    signature_length: ?packet.VarInt,
+    signature: ?packet.ByteArray,
 
-    pub fn deinit(self: *C2SLoginStartPacket, alloc: std.mem.Allocator) void {
-        alloc.free(self.username);
+    has_player_uuid: bool,
+    player_uuid: ?u128,
 
-        if (self.has_sig_data) {
-            alloc.free(self.public_key.?);
-            alloc.free(self.signature.?);
-        }
-
-        alloc.destroy(self);
+    pub fn write(self: C2SLoginStartPacket, alloc: std.mem.Allocator, writer: anytype) !void {
+        _ = self;
+        _ = alloc;
+        _ = writer;
+        @compileError("writing of packet C2SLoginStartPacket is not implemented yet");
     }
 
-    pub fn decode(alloc: std.mem.Allocator, base: *Packet) !*C2SLoginStartPacket {
-        var stream = base.getPayloadStream();
-        const reader = stream.reader();
-
-        const username = try utils.readByteArray(alloc, reader, try utils.readVarInt(reader));
-
-        const has_sig_data = if (try reader.readByte() == 1) true else false;
+    pub fn read(alloc: std.mem.Allocator, reader: anytype) !C2SLoginStartPacket {
+        const username = try packet.String.read(alloc, reader);
+        const has_sig_data = try reader.readByte() == 1;
 
         var timestamp: ?i64 = null;
-        var public_key_length: ?i32 = null;
-        var public_key: ?[]const u8 = null;
-        var signature_length: ?i32 = null;
-        var signature: ?[]const u8 = null;
+        var public_key_length: ?packet.VarInt = null;
+        var public_key: ?packet.ByteArray = null;
+        var signature_length: ?packet.VarInt = null;
+        var signature: ?packet.ByteArray = null;
 
         if (has_sig_data) {
             timestamp = try reader.readInt(i64, .big);
-            public_key_length = try utils.readVarInt(reader);
-            public_key = try utils.readByteArray(alloc, reader, public_key_length.?);
-            signature_length = try utils.readVarInt(reader);
-            signature = try utils.readByteArray(alloc, reader, signature_length.?);
+            public_key_length = try packet.VarInt.read(reader);
+            public_key = try packet.ByteArray.read(alloc, @intCast(public_key_length.?.value), reader);
+            signature_length = try packet.VarInt.read(reader);
+            signature = try packet.ByteArray.read(alloc, @intCast(signature_length.?.value), reader);
         }
 
-        const packet = try alloc.create(C2SLoginStartPacket);
-        packet.* = .{ .base = base, .username = username, .has_sig_data = has_sig_data, .timestamp = timestamp, .public_key_length = public_key_length, .public_key = public_key, .signature_length = signature_length, .signature = signature };
-        return packet;
+        const has_player_uuid = try reader.readByte() == 1;
+
+        var player_uuid: ?u128 = null;
+
+        if (has_player_uuid) {
+            player_uuid = try reader.readInt(u128, .big);
+        }
+
+        return .{
+            .username = username,
+
+            .has_sig_data = has_sig_data,
+            .timestamp = timestamp,
+            .public_key_length = public_key_length,
+            .public_key = public_key,
+            .signature_length = signature_length,
+            .signature = signature,
+
+            .has_player_uuid = has_player_uuid,
+            .player_uuid = player_uuid,
+        };
     }
 };
 
 pub const S2CLoginSuccessPacket = struct {
     pub const PacketID = 0x02;
 
-    base: *Packet,
+    uuid: u128 = undefined,
+    username: packet.String = undefined,
 
-    username: []const u8 = undefined,
-
-    pub fn init(alloc: std.mem.Allocator) !*S2CLoginSuccessPacket {
-        const base = try Packet.init(alloc);
-
-        const packet = try alloc.create(S2CLoginSuccessPacket);
-        packet.* = S2CLoginSuccessPacket{
-            .base = base,
-        };
-        return packet;
-    }
-
-    pub fn deinit(self: *S2CLoginSuccessPacket, alloc: std.mem.Allocator) void {
-        alloc.destroy(self);
-    }
-
-    pub fn encode(self: *S2CLoginSuccessPacket, alloc: std.mem.Allocator) !*Packet {
-        self.base.id = PacketID;
-
-        var buff = std.ArrayList(u8).init(alloc);
-        defer buff.deinit();
-        const writer = buff.writer();
-
-        // TODO: Add UUID
-        try writer.writeInt(u128, 0xDEADBEEFCAFEBABE, .big);
-        try utils.writeByteArray(writer, self.username);
-
-        try utils.writeVarInt(writer, 0);
-
-        self.base.payload = try buff.toOwnedSlice();
-        self.base.length = @as(i32, @intCast(self.base.payload.len)) + 1;
-
-        return self.base;
-    }
+    number_of_properties: packet.VarInt = .init(0),
 };

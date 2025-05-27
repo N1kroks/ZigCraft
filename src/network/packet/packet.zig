@@ -1,51 +1,130 @@
 const std = @import("std");
 
-const utils = @import("../utils.zig");
+const nbt = @import("../../nbt/nbt.zig");
+const types = @import("types.zig");
+
+pub usingnamespace @import("types.zig");
 
 pub usingnamespace @import("handshake.zig");
 pub usingnamespace @import("status.zig");
 pub usingnamespace @import("login.zig");
 pub usingnamespace @import("play.zig");
 
-pub const Packet = struct {
-    length: i32,
-    id: u8,
-    payload: []u8,
+pub const PacketHeader = struct { length: types.VarInt, id: types.VarInt };
 
-    pub fn init(alloc: std.mem.Allocator) !*Packet {
-        const packet = try alloc.create(Packet);
-        packet.* = .{
-            .length = 0,
-            .id = 0xFF,
-            .payload = undefined,
-        };
-        return packet;
+pub const PacketReader = struct {
+    alloc: std.mem.Allocator,
+
+    pub fn init(alloc: std.mem.Allocator) PacketReader {
+        return .{ .alloc = alloc };
     }
 
-    pub fn deinit(self: *Packet, alloc: std.mem.Allocator) void {
-        alloc.destroy(self);
+    pub fn read(self: *PacketReader, reader: anytype, comptime T: type) !T {
+        switch (@typeInfo(T)) {
+            .bool => return if (try reader.readByte() == 0) false else true,
+            .int => {
+                return reader.readInt(T, .big);
+            },
+            .float => {
+                const IntType = std.meta.Int(.signed, @bitSizeOf(T));
+                return @as(T, @bitCast(try reader.readInt(IntType, .big)));
+            },
+            .@"struct" => |struct_info| {
+                switch (T) {
+                    types.VarInt => return types.VarInt.read(reader),
+                    types.String => return types.String.read(self.alloc, reader),
+                    else => {
+                        if (@hasDecl(T, "write")) {
+                            return try @field(T, "read")(self.alloc, reader);
+                        }
+                        var packet: T = undefined;
+                        const fields = struct_info.fields;
+                        inline for (fields) |field| {
+                            @field(packet, field.name) = try self.read(reader, field.type);
+                        }
+                        return packet;
+                    },
+                }
+            },
+            .@"enum" => {
+                const int = try types.VarInt.read(reader);
+                const enum_val: T = @enumFromInt(int.value);
+                return enum_val;
+            },
+            else => @compileError("Type " ++ @typeName(T) ++ " is not supported for reading!"),
+        }
+    }
+};
+
+pub const PacketWriter = struct {
+    alloc: std.mem.Allocator,
+
+    pub fn init(alloc: std.mem.Allocator) PacketWriter {
+        return .{ .alloc = alloc };
     }
 
-    pub fn decode(alloc: std.mem.Allocator, reader: anytype) !*Packet {
-        const length = try utils.readVarInt(reader);
-        const data = try utils.readByteArray(alloc, reader, length);
+    pub fn write(self: *PacketWriter, wr: anytype, value: anytype) !void {
+        const T = @TypeOf(value);
 
-        const packet = try alloc.create(Packet);
-        packet.* = .{
-            .length = length,
-            .id = data[0],
-            .payload = data[1..],
-        };
-        return packet;
-    }
+        switch (@typeInfo(T)) {
+            .bool => try wr.writeByte(if (value) 1 else 0),
+            .int => try wr.writeInt(T, value, .big),
+            .pointer => |ptr_info| {
+                switch (ptr_info.size) {
+                    .slice => {
+                        for (value) |item| {
+                            try self.write(wr, item);
+                        }
+                    },
+                    else => @compileError("Unsupported pointer type: " ++ @typeName(T)),
+                }
+            },
+            .@"struct" => |struct_info| {
+                switch (T) {
+                    types.VarInt => try value.write(wr),
+                    types.String => try value.write(wr),
+                    else => {
+                        var buff: ?std.ArrayList(u8) = null;
+                        defer if (buff) |*b| b.deinit();
 
-    pub fn encode(self: *Packet, writer: anytype) !void {
-        try utils.writeVarInt(writer, self.length);
-        try writer.writeByte(self.id);
-        try writer.writeAll(self.payload);
-    }
+                        const writer = if (@hasDecl(T, "PacketID")) blk: {
+                            buff = std.ArrayList(u8).init(self.alloc);
+                            break :blk buff.?.writer().any();
+                        } else wr;
 
-    pub fn getPayloadStream(self: *Packet) std.io.FixedBufferStream([]u8) {
-        return std.io.fixedBufferStream(self.payload);
+                        if (@hasDecl(T, "write")) {
+                            try value.write(self.alloc, writer);
+                        } else {
+                            const fields = struct_info.fields;
+                            inline for (fields) |field| {
+                                try self.write(writer, @field(value, field.name));
+                            }
+                        }
+
+                        if (buff) |*b| if (@hasDecl(T, "PacketID")) {
+                            const data = try b.toOwnedSlice();
+
+                            const header = PacketHeader{
+                                .length = types.VarInt.init(@as(i32, @intCast(data.len)) + 1),
+                                .id = types.VarInt.init(@field(T, "PacketID")),
+                            };
+
+                            try self.write(wr, header);
+                            try wr.writeAll(data);
+                        };
+                    },
+                }
+            },
+            .@"enum" => {
+                try wr.writeByte(@intFromEnum(value));
+            },
+            .@"union" => {
+                switch (T) {
+                    nbt.NbtTag => try nbt.serializeTag(wr, value, false),
+                    else => @compileError("Unsupported union type: " ++ @typeName(T)),
+                }
+            },
+            else => @compileError("Type " ++ @typeName(T) ++ " is not supported for writing!"),
+        }
     }
 };

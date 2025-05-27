@@ -15,7 +15,7 @@ pub const Server = struct {
     next_entity_id: i32,
 
     pub fn init(alloc: std.mem.Allocator, address: std.net.Address) !Server {
-        const listener = try std.net.Address.listen(address, .{});
+        const listener = try std.net.Address.listen(address, .{ .reuse_address = true });
 
         return Server{
             .alloc = alloc,
@@ -74,7 +74,7 @@ pub const Server = struct {
         }
     }
 
-    fn updateChunksForPlayer(self: *Server, stream: std.net.Stream, player: *Player) !void {
+    fn updateChunksForPlayer(self: *Server, packet_writer: *packet.PacketWriter, writer: anytype, player: *Player) !void {
         const chunk_x = player.chunkX();
         const chunk_z = player.chunkZ();
         const prev_chunk_x = player.prev_chunk_x;
@@ -84,18 +84,12 @@ pub const Server = struct {
             player.prev_chunk_x = chunk_x;
             player.prev_chunk_z = chunk_z;
 
-            const pkt = try packet.S2CSetCenterChunk.init(self.alloc);
-            defer pkt.deinit(self.alloc);
-
-            pkt.chunk_x = chunk_x;
-            pkt.chunk_z = chunk_z;
-            std.debug.print("S2CSetCenterChunk: {}\n", .{pkt});
-
-            const basepkt = try pkt.encode(self.alloc);
-            defer basepkt.deinit(self.alloc);
-            try basepkt.encode(stream.writer());
+            const pkt = packet.S2CSetCenterChunk{
+                .chunk_x = .init(chunk_x),
+                .chunk_z = .init(chunk_z),
+            };
+            try packet_writer.write(writer, pkt);
         }
-
         const view_distance = 8; // TODO: Move to config
 
         {
@@ -111,12 +105,10 @@ pub const Server = struct {
 
                         const chunk = self.chunks.get(key) orelse continue;
 
-                        const pkt = try packet.S2CChunkDataPacket.init(self.alloc);
-                        pkt.chunk = chunk;
-
-                        const base_pkt = try pkt.encode(self.alloc);
-                        defer base_pkt.deinit(self.alloc);
-                        try base_pkt.encode(stream.writer());
+                        const pkt = packet.S2CChunkDataPacket{
+                            .chunk = chunk,
+                        };
+                        try packet_writer.write(writer, pkt);
 
                         try player.markChunkLoaded(x, z);
                     }
@@ -125,7 +117,7 @@ pub const Server = struct {
         }
     }
 
-    fn unknownPacketPanic(id: u8, state: network.ConnectionState) noreturn {
+    fn unknownPacketPanic(id: i32, state: network.ConnectionState) noreturn {
         std.debug.panic("Unknown packet with id: {} in state: {}", .{ id, state });
     }
 
@@ -134,37 +126,35 @@ pub const Server = struct {
 
         const reader = stream.reader();
         const writer = stream.writer();
+        var packet_reader = packet.PacketReader.init(self.alloc);
+        var packet_writer = packet.PacketWriter.init(self.alloc);
         var state: network.ConnectionState = .handshake;
 
         var player: Player = undefined;
 
         while (true) {
-            const base_pkt = packet.Packet.decode(self.alloc, reader) catch |err| switch (err) {
+            const header = packet_reader.read(reader, packet.PacketHeader) catch |err| switch (err) {
                 error.BrokenPipe, error.EndOfStream => break,
                 else => {
-                    std.debug.print("Failed to decode packet: {s}\n", .{@errorName(err)});
+                    std.debug.print("Failed to read packet: {s}\n", .{@errorName(err)});
                     return err;
                 },
             };
 
             switch (state) {
                 .handshake => {
-                    switch (base_pkt.id) {
+                    switch (header.id.value) {
                         packet.C2SHandshakePacket.PacketID => {
-                            const pkt = try packet.C2SHandshakePacket.decode(self.alloc, base_pkt);
-                            defer pkt.deinit(self.alloc);
+                            const pkt = try packet_reader.read(reader, packet.C2SHandshakePacket);
                             state = pkt.next_state;
                         },
-                        else => unknownPacketPanic(base_pkt.id, state),
+                        else => unknownPacketPanic(header.id.value, state),
                     }
                 },
                 .status => {
-                    switch (base_pkt.id) {
+                    switch (header.id.value) {
                         packet.C2SStatusRequestPacket.PacketID => {
-                            const pkt = try packet.S2CStatusResponsePacket.init(self.alloc);
-                            defer pkt.deinit(self.alloc);
-
-                            pkt.response = try self.alloc.dupe(u8,
+                            const pkt = packet.S2CStatusResponsePacket{ .response = .init(try self.alloc.dupe(u8,
                                 \\{
                                 \\    "version": {
                                 \\        "name": "1.19.2",
@@ -180,123 +170,95 @@ pub const Server = struct {
                                 \\    "previewsChat": false,
                                 \\    "enforcesSecureChat": false
                                 \\}
-                            );
-
-                            const basepkt = try pkt.encode(self.alloc);
-                            defer basepkt.deinit(self.alloc);
-                            try basepkt.encode(writer);
+                            )) };
+                            try packet_writer.write(writer, pkt);
                         },
-                        packet.C2SPingRequestPacket.PacketID => {
-                            const pkt = try packet.C2SPingRequestPacket.decode(self.alloc, base_pkt);
-                            defer pkt.deinit(self.alloc);
-
-                            const spkt = try packet.S2CPingResponsePacket.init(self.alloc);
-                            defer spkt.deinit(self.alloc);
-
-                            spkt.payload = pkt.payload;
-
-                            const basepkt = try spkt.encode(self.alloc);
-                            defer basepkt.deinit(self.alloc);
-                            try basepkt.encode(writer);
+                        packet.PingPacket.PacketID => {
+                            const pkt = try packet_reader.read(reader, packet.PingPacket);
+                            try packet_writer.write(writer, pkt);
                         },
-                        else => unknownPacketPanic(base_pkt.id, state),
+                        else => unknownPacketPanic(header.id.value, state),
                     }
                 },
                 .login => {
-                    switch (base_pkt.id) {
+                    switch (header.id.value) {
                         packet.C2SLoginStartPacket.PacketID => {
-                            const pkt = try packet.C2SLoginStartPacket.decode(self.alloc, base_pkt);
-                            defer pkt.deinit(self.alloc);
+                            const pkt = try packet_reader.read(reader, packet.C2SLoginStartPacket);
 
                             {
-                                const spkt = try packet.S2CLoginSuccessPacket.init(self.alloc);
-                                defer spkt.deinit(self.alloc);
+                                const spkt = packet.S2CLoginSuccessPacket{
+                                    .username = pkt.username,
+                                    .uuid = 0xDEADBEEFCAFEBABE, // TODO: Generate UUID
+                                };
+                                try packet_writer.write(writer, spkt);
 
-                                player = try Player.init(self.alloc, self.next_entity_id, pkt.username);
+                                player = try Player.init(self.alloc, self.next_entity_id, pkt.username.data);
                                 try self.players.append(player);
-
-                                spkt.username = pkt.username;
-
-                                const basepkt = try spkt.encode(self.alloc);
-                                defer basepkt.deinit(self.alloc);
-                                try basepkt.encode(writer);
                             }
 
                             state = .play;
 
                             {
-                                const spkt = try packet.S2CJoinGamePacket.init(self.alloc);
-                                defer spkt.deinit(self.alloc);
-                                spkt.entity_id = self.next_entity_id;
-                                self.next_entity_id += 1;
-                                spkt.gamemode = .{
-                                    .mode = .creative,
-                                    .hardcode = false,
+                                const spkt = packet.S2CLoginPlayPacket{
+                                    .entity_id = self.next_entity_id,
+                                    .registry_codec = network.BASIC_REGISTRY_CODEC,
                                 };
-                                spkt.registry_codec = network.BASIC_REGISTRY_CODEC;
-
-                                const basepkt = try spkt.encode(self.alloc);
-                                defer basepkt.deinit(self.alloc);
-                                try basepkt.encode(writer);
+                                try packet_writer.write(writer, spkt);
                             }
 
                             {
-                                const spkt = try packet.S2CSynchronizePlayerPosition.init(self.alloc);
-                                defer spkt.deinit(self.alloc);
-                                spkt.x = player.x;
-                                spkt.y = player.y;
-                                spkt.z = player.z;
-
-                                const basepkt = try spkt.encode(self.alloc);
-                                defer basepkt.deinit(self.alloc);
-                                try basepkt.encode(writer);
+                                const spkt = packet.S2CSynchronizePlayerPosition{
+                                    .x = player.x,
+                                    .y = player.y,
+                                    .z = player.z,
+                                };
+                                try packet_writer.write(writer, spkt);
                             }
 
-                            try self.updateChunksForPlayer(stream, &player);
+                            try self.updateChunksForPlayer(&packet_writer, writer, &player);
 
-                            std.debug.print("Player {s} successfully joined game\n", .{pkt.username});
+                            std.debug.print("Player {s} successfully joined game\n", .{pkt.username.data});
                         },
-                        else => unknownPacketPanic(base_pkt.id, state),
+                        else => unknownPacketPanic(header.id.value, state),
                     }
                 },
                 .play => {
-                    switch (base_pkt.id) {
-                        0x00, // C2SConfirmTeleportation
-                        0x08, // C2SClientInformation
-                        0x0d, // C2SPluginMessage
-                        => {},
+                    switch (header.id.value) {
                         packet.C2SPlayerPositionPacket.PacketID => {
-                            const pkt = try packet.C2SPlayerPositionPacket.decode(self.alloc, base_pkt);
-                            defer pkt.deinit(self.alloc);
+                            const pkt = try packet_reader.read(reader, packet.C2SPlayerPositionPacket);
                             player.x = pkt.x;
                             player.y = pkt.y;
                             player.z = pkt.z;
-                            try self.updateChunksForPlayer(stream, &player);
+                            try self.updateChunksForPlayer(&packet_writer, writer, &player);
                         },
                         packet.C2SPlayerPositionRotationPacket.PacketID => {
-                            const pkt = try packet.C2SPlayerPositionRotationPacket.decode(self.alloc, base_pkt);
-                            defer pkt.deinit(self.alloc);
+                            const pkt = try packet_reader.read(reader, packet.C2SPlayerPositionRotationPacket);
                             player.x = pkt.x;
                             player.y = pkt.y;
                             player.z = pkt.z;
                             player.yaw = pkt.yaw;
                             player.pitch = pkt.pitch;
-                            try self.updateChunksForPlayer(stream, &player);
+                            try self.updateChunksForPlayer(&packet_writer, writer, &player);
                         },
                         packet.C2SPlayerRotationPacket.PacketID => {
-                            const pkt = try packet.C2SPlayerRotationPacket.decode(self.alloc, base_pkt);
-                            defer pkt.deinit(self.alloc);
+                            const pkt = try packet_reader.read(reader, packet.C2SPlayerRotationPacket);
                             player.yaw = pkt.yaw;
                             player.pitch = pkt.pitch;
                         },
-                        packet.C2SPlayerAbilitiesPacket.PacketID => {},
-                        packet.C2SPlayerCommandPacket.PacketID => {},
-                        else => std.debug.print("Unknown play packet with id: 0x{x}\n", .{base_pkt.id}),
+                        packet.C2SClientInformationPacket.PacketID,
+                        packet.C2SConfirmTeleportPacket.PacketID,
+                        packet.C2SPlayerAbilitiesPacket.PacketID,
+                        packet.C2SPlayerCommandPacket.PacketID,
+                        => {
+                            try reader.skipBytes(@as(u64, @intCast(header.length.value)) - 1, .{});
+                        },
+                        else => {
+                            try reader.skipBytes(@as(u64, @intCast(header.length.value)) - 1, .{});
+                            std.debug.print("Unknown play packet with id: 0x{x}\n", .{header.id.value});
+                        },
                     }
                 },
             }
-
-            base_pkt.deinit(self.alloc);
         }
     }
 };

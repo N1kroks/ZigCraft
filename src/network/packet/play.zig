@@ -1,214 +1,75 @@
 const std = @import("std");
 
-const utils = @import("../utils.zig");
 const game = @import("../../game/game.zig");
 const nbt = @import("../../nbt/nbt.zig");
-const Packet = @import("packet.zig").Packet;
+const packet = @import("packet.zig");
 const chunk = @import("../../chunk/chunk.zig");
 
-pub const S2CJoinGamePacket = struct {
-    pub const PacketID = 0x25;
+pub const C2SConfirmTeleportPacket = struct {
+    pub const PacketID = 0x00;
 
-    base: *Packet,
+    id: packet.VarInt,
+};
 
-    entity_id: i32 = 0,
-    gamemode: game.Gamemode = .{ .mode = .survival, .hardcode = false },
-    previous_gamemode: i8 = -1,
-    dimensions: []const []const u8 = &[_][]const u8{"minecraft:world"},
-    registry_codec: nbt.NbtTag = undefined,
-    dimension_type: []const u8 = "minecraft:overworld",
-    dimension_name: []const u8 = "minecraft:world",
-    hashed_seed: u64 = 0,
-    view_distance: u8 = 8,
-    simulation_distace: u8 = 8,
-    gamerules: game.Gamerules = .{},
-    is_debug: bool = false,
-    is_flat: bool = false,
+pub const C2SClientInformationPacket = struct {
+    pub const PacketID = 0x08;
 
-    pub fn init(alloc: std.mem.Allocator) !*S2CJoinGamePacket {
-        const base = try Packet.init(alloc);
+    locale: packet.String,
 
-        const packet = try alloc.create(S2CJoinGamePacket);
-        packet.* = .{
-            .base = base,
-        };
-        return packet;
-    }
+    view_distance: i8,
 
-    pub fn deinit(self: *S2CJoinGamePacket, alloc: std.mem.Allocator) void {
-        alloc.destroy(self);
-    }
+    chat_mode: enum(u8) { enabled, commands_only, hidden },
+    chat_colors: bool,
 
-    pub fn encode(self: *S2CJoinGamePacket, alloc: std.mem.Allocator) !*Packet {
-        self.base.id = PacketID;
+    displayed_skin_parts: u8,
+    main_hand: enum(u8) { left, right },
 
-        var buff = std.ArrayList(u8).init(alloc);
-        defer buff.deinit();
-        const writer = buff.writer();
-
-        // entity id
-        try writer.writeInt(i32, self.entity_id, .big);
-
-        // gamemode
-        try writer.writeByte(@intFromBool(self.gamemode.hardcode));
-        try writer.writeByte(@intFromEnum(self.gamemode.mode));
-        try writer.writeInt(i8, self.previous_gamemode, .big);
-
-        try utils.writeVarInt(writer, @as(i32, @intCast(self.dimensions.len)));
-        for (self.dimensions) |d|
-            try utils.writeByteArray(writer, d);
-
-        // registry codec
-        try nbt.serializeTag(writer, self.registry_codec, false);
-
-        // dimensions type
-        try utils.writeByteArray(writer, self.dimension_type);
-
-        // dimension name
-        try utils.writeByteArray(writer, self.dimension_name);
-
-        // hashed seed
-        try writer.writeInt(u64, self.hashed_seed, .big);
-
-        // max players
-        try writer.writeByte(0);
-
-        // view distance
-        try utils.writeVarInt(writer, self.view_distance);
-
-        // simulation distance
-        try utils.writeVarInt(writer, self.simulation_distace);
-
-        // gamerules
-        try writer.writeByte(@intFromBool(self.gamerules.reduced_debug_info));
-        try writer.writeByte(@intFromBool(self.gamerules.do_immediate_respawn));
-
-        // is debug
-        try writer.writeByte(@intFromBool(self.is_debug));
-
-        // is flat
-        try writer.writeByte(@intFromBool(self.is_flat));
-
-        // has death location
-        try writer.writeByte(0);
-
-        self.base.payload = try buff.toOwnedSlice();
-        self.base.length = @as(i32, @intCast(self.base.payload.len)) + 1;
-
-        return self.base;
-    }
+    enable_text_filtering: bool,
+    allow_server_listings: bool,
 };
 
 pub const C2SPlayerPositionPacket = struct {
     pub const PacketID = 0x14;
 
-    base: *Packet,
-
     x: f64,
     y: f64,
     z: f64,
+
     on_ground: bool,
-
-    pub fn deinit(self: *C2SPlayerPositionPacket, alloc: std.mem.Allocator) void {
-        alloc.destroy(self);
-    }
-
-    pub fn decode(alloc: std.mem.Allocator, base: *Packet) !*C2SPlayerPositionPacket {
-        var stream = base.getPayloadStream();
-        const reader = stream.reader();
-
-        const x = @as(f64, @bitCast(try reader.readInt(i64, .big)));
-        const y = @as(f64, @bitCast(try reader.readInt(i64, .big)));
-        const z = @as(f64, @bitCast(try reader.readInt(i64, .big)));
-        const on_ground = if (try reader.readByte() == 1) true else false;
-
-        const packet = try alloc.create(C2SPlayerPositionPacket);
-        packet.* = .{ .base = base, .x = x, .y = y, .z = z, .on_ground = on_ground };
-        return packet;
-    }
 };
 
 pub const C2SPlayerPositionRotationPacket = struct {
     pub const PacketID = 0x15;
 
-    base: *Packet,
-
     x: f64,
     y: f64,
     z: f64,
+
     yaw: f32,
     pitch: f32,
+
     on_ground: bool,
-
-    pub fn deinit(self: *C2SPlayerPositionRotationPacket, alloc: std.mem.Allocator) void {
-        alloc.destroy(self);
-    }
-
-    pub fn decode(alloc: std.mem.Allocator, base: *Packet) !*C2SPlayerPositionRotationPacket {
-        var stream = base.getPayloadStream();
-        const reader = stream.reader();
-
-        const x = @as(f64, @bitCast(try reader.readInt(i64, .big)));
-        const y = @as(f64, @bitCast(try reader.readInt(i64, .big)));
-        const z = @as(f64, @bitCast(try reader.readInt(i64, .big)));
-        const yaw = @as(f32, @bitCast(try reader.readInt(i32, .big)));
-        const pitch = @as(f32, @bitCast(try reader.readInt(i32, .big)));
-        const on_ground = if (try reader.readByte() == 1) true else false;
-
-        const packet = try alloc.create(C2SPlayerPositionRotationPacket);
-        packet.* = .{ .base = base, .x = x, .y = y, .z = z, .yaw = yaw, .pitch = pitch, .on_ground = on_ground };
-        return packet;
-    }
 };
 
 pub const C2SPlayerRotationPacket = struct {
     pub const PacketID = 0x16;
 
-    base: *Packet,
-
     yaw: f32,
     pitch: f32,
     on_ground: bool,
-
-    pub fn deinit(self: *C2SPlayerRotationPacket, alloc: std.mem.Allocator) void {
-        alloc.destroy(self);
-    }
-
-    pub fn decode(alloc: std.mem.Allocator, base: *Packet) !*C2SPlayerRotationPacket {
-        var stream = base.getPayloadStream();
-        const reader = stream.reader();
-
-        const yaw = @as(f32, @bitCast(try reader.readInt(i32, .big)));
-        const pitch = @as(f32, @bitCast(try reader.readInt(i32, .big)));
-        const on_ground = if (try reader.readByte() == 1) true else false;
-
-        const packet = try alloc.create(C2SPlayerRotationPacket);
-        packet.* = .{ .base = base, .yaw = yaw, .pitch = pitch, .on_ground = on_ground };
-        return packet;
-    }
 };
 
 pub const C2SPlayerAbilitiesPacket = struct {
     pub const PacketID = 0x1c;
 
-    base: *Packet,
-
     flags: i8,
+};
 
-    pub fn deinit(self: *C2SPlayerAbilitiesPacket, alloc: std.mem.Allocator) void {
-        alloc.destroy(self);
-    }
+pub const S2CUnloadChunkPacket = struct {
+    pub const PacketID = 0x1c;
 
-    pub fn decode(alloc: std.mem.Allocator, base: *Packet) !*C2SPlayerAbilitiesPacket {
-        var stream = base.getPayloadStream();
-        const reader = stream.reader();
-
-        const flags = try reader.readByte();
-
-        const packet = try alloc.create(C2SPlayerAbilitiesPacket);
-        packet.* = .{ .base = base, .flags = flags };
-        return packet;
-    }
+    chunk_x: i32,
+    chunk_z: i32,
 };
 
 pub const C2SPlayerCommandPacket = struct {
@@ -216,58 +77,23 @@ pub const C2SPlayerCommandPacket = struct {
 
     pub const ActionID = enum(u8) { start_sneaking = 0, stop_sneaking = 1, leave_bed = 2, start_sprinting = 3, stop_sprinting = 4, start_jump_with_horse = 5, stop_jump_with_horse = 6, open_horse_inventory = 7, start_flying_with_elytra = 8 };
 
-    base: *Packet,
-
-    player_id: i32,
+    player_id: packet.VarInt,
     action_id: ActionID,
-    jump_boost: i32,
-
-    pub fn deinit(self: *C2SPlayerCommandPacket, alloc: std.mem.Allocator) void {
-        alloc.destroy(self);
-    }
-
-    pub fn decode(alloc: std.mem.Allocator, base: *Packet) !*C2SPlayerCommandPacket {
-        var stream = base.getPayloadStream();
-        const reader = stream.reader();
-
-        const player_id = try utils.readVarInt(reader);
-        const action_id: ActionID = @enumFromInt(try utils.readVarInt(reader));
-        const jump_boost = try utils.readVarInt(reader);
-
-        const packet = try alloc.create(C2SPlayerCommandPacket);
-        packet.* = .{ .base = base, .player_id = player_id, .action_id = action_id, .jump_boost = jump_boost };
-        return packet;
-    }
+    jump_boost: packet.VarInt,
 };
 
 pub const S2CChunkDataPacket = struct {
     pub const PacketID = 0x21;
 
-    base: *Packet,
-
     chunk: *chunk.Chunk = undefined,
 
-    pub fn init(alloc: std.mem.Allocator) !*S2CChunkDataPacket {
-        const base = try Packet.init(alloc);
-
-        const packet = try alloc.create(S2CChunkDataPacket);
-        packet.* = .{
-            .base = base,
-        };
-        return packet;
+    pub fn read(alloc: std.mem.Allocator, reader: anytype) !S2CChunkDataPacket {
+        _ = alloc;
+        _ = reader;
+        @compileError("reading of packet S2CChunkDataPacket is not implemented yet");
     }
 
-    pub fn deinit(self: *S2CChunkDataPacket, alloc: std.mem.Allocator) void {
-        alloc.destroy(self);
-    }
-
-    pub fn encode(self: *S2CChunkDataPacket, alloc: std.mem.Allocator) !*Packet {
-        self.base.id = PacketID;
-
-        var buff = std.ArrayList(u8).init(alloc);
-        defer buff.deinit();
-        const writer = buff.writer();
-
+    pub fn write(self: S2CChunkDataPacket, alloc: std.mem.Allocator, writer: anytype) !void {
         try writer.writeInt(i32, self.chunk.x, .big);
         try writer.writeInt(i32, self.chunk.z, .big);
 
@@ -304,126 +130,73 @@ pub const S2CChunkDataPacket = struct {
             try cs_writer.writeInt(i16, @as(i16, @intCast(section.block_count)), .big);
 
             try cs_writer.writeByte(section.data.element_bits);
-            try utils.writeVarInt(cs_writer, @as(i32, @intCast(section.data.data.len)));
+            try packet.VarInt.init(@as(i32, @intCast(section.data.data.len))).write(cs_writer);
             for (section.data.data) |long| {
                 try cs_writer.writeInt(i64, @as(i64, @bitCast(long)), .big);
             }
 
             try cs_writer.writeByte(0);
-            try utils.writeVarInt(cs_writer, 0);
-            try utils.writeVarInt(cs_writer, 0);
+            try packet.VarInt.init(0).write(cs_writer);
+            try packet.VarInt.init(0).write(cs_writer);
         }
-        try utils.writeByteArray(writer, cs_data.items);
+
+        try packet.VarInt.init(@as(i32, @intCast(cs_data.items.len))).write(writer);
+        try packet.ByteArray.init(cs_data.items).write(writer);
 
         // block entities
-        try utils.writeVarInt(writer, 0);
+        try packet.VarInt.init(0).write(writer);
 
         // trust edges
         try writer.writeByte(1);
 
         // bitsets
-        try utils.writeVarInt(writer, 0);
-        try utils.writeVarInt(writer, 0);
-        try utils.writeVarInt(writer, 1);
+        try packet.VarInt.init(0).write(writer);
+        try packet.VarInt.init(0).write(writer);
+        try packet.VarInt.init(1).write(writer);
         try writer.writeInt(i64, 0x3FFFF, .big);
-        try utils.writeVarInt(writer, 1);
+        try packet.VarInt.init(1).write(writer);
         try writer.writeInt(i64, 0x3FFFF, .big);
 
         // sky light
-        try utils.writeVarInt(writer, 0);
+        try packet.VarInt.init(0).write(writer);
 
         // block light
-        try utils.writeVarInt(writer, 0);
-
-        self.base.payload = try buff.toOwnedSlice();
-        self.base.length = @as(i32, @intCast(self.base.payload.len)) + 1;
-
-        return self.base;
+        try packet.VarInt.init(0).write(writer);
     }
 };
 
-pub const S2CUnloadChunkPacket = struct {
-    pub const PacketID = 0x1c;
+pub const S2CLoginPlayPacket = struct {
+    pub const PacketID = 0x25;
 
-    base: *Packet,
+    entity_id: i32 = undefined,
 
-    chunk_x: i32 = 0,
-    chunk_z: i32 = 0,
+    gamemode: game.Gamemode = .{ .hardcode = false, .mode = .creative },
+    previous_gamemode: i8 = -1,
 
-    pub fn init(alloc: std.mem.Allocator) !*S2CSetCenterChunk {
-        const base = try Packet.init(alloc);
+    dimension_count: packet.VarInt = .init(1),
+    dimensions: []const packet.String = &[_]packet.String{packet.String.init("minecraft:overworld")},
 
-        const packet = try alloc.create(S2CSetCenterChunk);
-        packet.* = .{
-            .base = base,
-        };
-        return packet;
-    }
+    registry_codec: nbt.NbtTag = undefined,
 
-    pub fn deinit(self: *S2CSetCenterChunk, alloc: std.mem.Allocator) void {
-        alloc.destroy(self);
-    }
+    dimension_type: packet.String = .init("minecraft:overworld"),
+    dimension_name: packet.String = .init("minecraft:overworld"),
 
-    pub fn encode(self: *S2CSetCenterChunk, alloc: std.mem.Allocator) !*Packet {
-        self.base.id = PacketID;
+    hashed_seed: u64 = 0,
 
-        var buff = std.ArrayList(u8).init(alloc);
-        defer buff.deinit();
-        const writer = buff.writer();
+    max_players: packet.VarInt = .init(0),
+    view_distance: packet.VarInt = .init(8),
+    simulation_distace: packet.VarInt = .init(8),
 
-        try writer.writeInt(i32, self.chunk_x, .big);
-        try writer.writeInt(i32, self.chunk_z, .big);
+    gamerules: game.Gamerules = .{ .reduced_debug_info = false, .do_immediate_respawn = false },
 
-        self.base.payload = try buff.toOwnedSlice();
-        self.base.length = @as(i32, @intCast(self.base.payload.len)) + 1;
+    is_debug: bool = false,
+    is_flat: bool = false,
 
-        return self.base;
-    }
-};
-
-pub const S2CSetCenterChunk = struct {
-    pub const PacketID = 0x4B;
-
-    base: *Packet,
-
-    chunk_x: i32 = 0,
-    chunk_z: i32 = 0,
-
-    pub fn init(alloc: std.mem.Allocator) !*S2CSetCenterChunk {
-        const base = try Packet.init(alloc);
-
-        const packet = try alloc.create(S2CSetCenterChunk);
-        packet.* = .{
-            .base = base,
-        };
-        return packet;
-    }
-
-    pub fn deinit(self: *S2CSetCenterChunk, alloc: std.mem.Allocator) void {
-        alloc.destroy(self);
-    }
-
-    pub fn encode(self: *S2CSetCenterChunk, alloc: std.mem.Allocator) !*Packet {
-        self.base.id = PacketID;
-
-        var buff = std.ArrayList(u8).init(alloc);
-        defer buff.deinit();
-        const writer = buff.writer();
-
-        try utils.writeVarInt(writer, self.chunk_x);
-        try utils.writeVarInt(writer, self.chunk_z);
-
-        self.base.payload = try buff.toOwnedSlice();
-        self.base.length = @as(i32, @intCast(self.base.payload.len)) + 1;
-
-        return self.base;
-    }
+    has_deadth_location: bool = false,
 };
 
 pub const S2CSynchronizePlayerPosition = struct {
     pub const PacketID = 0x39;
-
-    base: *Packet,
 
     x: f64 = 0,
     y: f64 = 0,
@@ -441,29 +214,18 @@ pub const S2CSynchronizePlayerPosition = struct {
 
         _pad: u3 = 0,
     } = .{},
+
     teleport_id: i32 = 0,
     dismount_vehicle: bool = false,
 
-    pub fn init(alloc: std.mem.Allocator) !*S2CSynchronizePlayerPosition {
-        const base = try Packet.init(alloc);
-
-        const packet = try alloc.create(S2CSynchronizePlayerPosition);
-        packet.* = .{
-            .base = base,
-        };
-        return packet;
+    pub fn read(alloc: std.mem.Allocator, reader: anytype) !S2CChunkDataPacket {
+        _ = alloc;
+        _ = reader;
+        @compileError("reading of packet S2CSynchronizePlayerPosition is not implemented yet");
     }
 
-    pub fn deinit(self: *S2CSynchronizePlayerPosition, alloc: std.mem.Allocator) void {
-        alloc.destroy(self);
-    }
-
-    pub fn encode(self: *S2CSynchronizePlayerPosition, alloc: std.mem.Allocator) !*Packet {
-        self.base.id = PacketID;
-
-        var buff = std.ArrayList(u8).init(alloc);
-        defer buff.deinit();
-        const writer = buff.writer();
+    pub fn write(self: S2CSynchronizePlayerPosition, alloc: std.mem.Allocator, writer: anytype) !void {
+        _ = alloc;
 
         try writer.writeInt(u64, @as(u64, @bitCast(self.x)), .big);
         try writer.writeInt(u64, @as(u64, @bitCast(self.y)), .big);
@@ -474,13 +236,15 @@ pub const S2CSynchronizePlayerPosition = struct {
 
         try writer.writeByte(@as(u8, @bitCast(self.flags)));
 
-        try utils.writeVarInt(writer, self.teleport_id);
+        try packet.VarInt.init(self.teleport_id).write(writer);
 
         try writer.writeByte(@intFromBool(self.dismount_vehicle));
-
-        self.base.payload = try buff.toOwnedSlice();
-        self.base.length = @as(i32, @intCast(self.base.payload.len)) + 1;
-
-        return self.base;
     }
+};
+
+pub const S2CSetCenterChunk = struct {
+    pub const PacketID = 0x4B;
+
+    chunk_x: packet.VarInt,
+    chunk_z: packet.VarInt,
 };
