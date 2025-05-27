@@ -5,6 +5,9 @@ const network = @import("network/network.zig");
 const Player = @import("player.zig").Player;
 const packet = network.packet;
 
+const KEEPALIVE_INTERVAL_MS = 20000;
+const KEEPALIVE_TIMEOUT_MS = 30000;
+
 pub const Server = struct {
     alloc: std.mem.Allocator,
     listener: std.net.Server,
@@ -223,6 +226,24 @@ pub const Server = struct {
                     }
                 },
                 .play => {
+                    const now = std.time.milliTimestamp();
+
+                    if (now - player.last_keepalive_time >= KEEPALIVE_INTERVAL_MS) {
+                        if (player.pending_keepalive and (now - player.last_keepalive_time >= KEEPALIVE_TIMEOUT_MS)) {
+                            std.debug.print("Player {s} timed out\n", .{player.name});
+                            stream.close();
+                        }
+
+                        if (!player.pending_keepalive) {
+                            player.last_keepalive_id = now;
+                            player.last_keepalive_time = now;
+                            player.pending_keepalive = true;
+
+                            const pkt = packet.S2CKeepAlivePacket{ .keep_alive_id = player.last_keepalive_id };
+                            try packet_writer.write(writer, pkt);
+                        }
+                    }
+
                     switch (header.id.value) {
                         packet.C2SPlayerPositionPacket.PacketID => {
                             const pkt = try packet_reader.read(reader, packet.C2SPlayerPositionPacket);
@@ -244,6 +265,12 @@ pub const Server = struct {
                             const pkt = try packet_reader.read(reader, packet.C2SPlayerRotationPacket);
                             player.yaw = pkt.yaw;
                             player.pitch = pkt.pitch;
+                        },
+                        packet.C2SKeepAlivePacket.PacketID => {
+                            const pkt = try packet_reader.read(reader, packet.C2SKeepAlivePacket);
+                            if (player.pending_keepalive and pkt.keep_alive_id == player.last_keepalive_id) {
+                                player.pending_keepalive = false;
+                            }
                         },
                         packet.C2SClientInformationPacket.PacketID,
                         packet.C2SConfirmTeleportPacket.PacketID,

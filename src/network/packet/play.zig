@@ -28,6 +28,12 @@ pub const C2SClientInformationPacket = struct {
     allow_server_listings: bool,
 };
 
+pub const C2SKeepAlivePacket = struct {
+    pub const PacketID = 0x12;
+
+    keep_alive_id: i64,
+};
+
 pub const C2SPlayerPositionPacket = struct {
     pub const PacketID = 0x14;
 
@@ -80,6 +86,12 @@ pub const C2SPlayerCommandPacket = struct {
     player_id: packet.VarInt,
     action_id: ActionID,
     jump_boost: packet.VarInt,
+};
+
+pub const S2CKeepAlivePacket = struct {
+    pub const PacketID = 0x20;
+
+    keep_alive_id: i64,
 };
 
 pub const S2CChunkDataPacket = struct {

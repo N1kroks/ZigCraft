@@ -21,7 +21,12 @@ pub const Player = struct {
     prev_chunk_x: i32,
     prev_chunk_z: i32,
 
+    last_keepalive_time: i64,
+    last_keepalive_id: i64,
+    pending_keepalive: bool,
+
     pub fn init(alloc: std.mem.Allocator, id: i32, name: []const u8) !Player {
+        const now = std.time.milliTimestamp();
         return Player{
             .id = id,
             .name = try alloc.dupe(u8, name),
@@ -40,6 +45,10 @@ pub const Player = struct {
 
             .prev_chunk_x = 0,
             .prev_chunk_z = 0,
+
+            .last_keepalive_time = now,
+            .last_keepalive_id = 0,
+            .pending_keepalive = false,
         };
     }
 
