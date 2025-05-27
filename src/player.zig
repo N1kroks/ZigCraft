@@ -44,7 +44,7 @@ pub const Player = struct {
     }
 
     fn chunkKey(x: i32, z: i32) u64 {
-        return (@as(u64, @bitCast(@as(i64, x))) << 32) | @as(u64, @bitCast(@as(i64, z)));
+        return (@as(u64, @as(u32, @bitCast(x))) << 32) | @as(u64, @as(u32, @bitCast(z)));
     }
 
     pub fn deinit(self: *Player, alloc: std.mem.Allocator) void {
