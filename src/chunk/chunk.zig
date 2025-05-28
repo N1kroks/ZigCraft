@@ -24,22 +24,6 @@ pub const Chunk = struct {
             try chunk.sections.put(i, section);
         }
 
-        var cy: u32 = 0;
-        while (cy < 16) : (cy += 1) {
-            var cz: u32 = 0;
-            while (cz < 16) : (cz += 1) {
-                var cx: u32 = 0;
-                while (cx < 16) : (cx += 1) {
-                    if (@as(f64, @floatFromInt(cy)) <= (std.math.sin(@as(f64, @floatFromInt(cx)) * 0.8) * 0.5 + 0.5) * 10.0) {
-                        _ = try chunk.setBlock(cx, cy, cz, 1);
-                    }
-                    if (@as(f64, @floatFromInt(cy)) <= (std.math.sin(@as(f64, @floatFromInt(cz)) * 0.3) * 0.5 + 0.5) * 10.0) {
-                        _ = try chunk.setBlock(cx, cy, cz, 1);
-                    }
-                }
-            }
-        }
-
         return chunk;
     }
 

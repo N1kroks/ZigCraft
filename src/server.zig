@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const Chunk = @import("chunk/chunk.zig").Chunk;
+const TerrainGenerator = @import("terrain_generator.zig").TerrainGenerator;
 const network = @import("network/network.zig");
 const Player = @import("player.zig").Player;
 const packet = network.packet;
@@ -15,6 +16,8 @@ pub const Server = struct {
     players: std.ArrayList(Player),
     chunks: std.AutoHashMap(u64, *Chunk),
 
+    terrain_generator: TerrainGenerator,
+
     next_entity_id: i32,
 
     pub fn init(alloc: std.mem.Allocator, address: std.net.Address) !Server {
@@ -26,6 +29,8 @@ pub const Server = struct {
 
             .players = std.ArrayList(Player).init(alloc),
             .chunks = std.AutoHashMap(u64, *Chunk).init(alloc),
+
+            .terrain_generator = try TerrainGenerator.init(alloc),
 
             .next_entity_id = 0,
         };
@@ -44,11 +49,18 @@ pub const Server = struct {
         }
         self.chunks.deinit();
 
+        self.terrain_generator.deinit();
         self.listener.deinit();
     }
 
     fn chunkKey(x: i32, z: i32) u64 {
         return (@as(u64, @as(u32, @bitCast(x))) << 32) | @as(u64, @as(u32, @bitCast(z)));
+    }
+
+    fn generateChunk(self: *Server, x: i32, z: i32) !void {
+        const chunk = try Chunk.init(self.alloc, x, z, 384);
+        try self.terrain_generator.generateTerrain(chunk);
+        try self.chunks.put(chunkKey(x, z), chunk);
     }
 
     fn generateSpawnChunks(self: *Server) !void {
@@ -58,7 +70,7 @@ pub const Server = struct {
         while (x <= spawn_radius) : (x += 1) {
             var z: i32 = -spawn_radius;
             while (z <= spawn_radius) : (z += 1) {
-                try self.chunks.put(chunkKey(x, z), try Chunk.init(self.alloc, x, z, 256));
+                try self.generateChunk(x, z);
             }
         }
     }
@@ -103,7 +115,7 @@ pub const Server = struct {
                     const key = chunkKey(x, z);
                     if (!player.isChunkLoaded(x, z)) {
                         if (!self.chunks.contains(key)) {
-                            try self.chunks.put(chunkKey(x, z), try Chunk.init(self.alloc, x, z, 256));
+                            try self.generateChunk(x, z);
                         }
 
                         const chunk = self.chunks.get(key) orelse continue;

@@ -7,6 +7,12 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
     });
 
+    const fastnoise = b.addModule("fastnoise", .{
+        .root_source_file = b.path("deps/fastnoise.zig"),
+    });
+
+    exe.root_module.addImport("fastnoise", fastnoise);
+
     b.installArtifact(exe);
 
     const run_exe = b.addRunArtifact(exe);

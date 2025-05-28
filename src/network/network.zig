@@ -118,7 +118,7 @@ pub const BASIC_REGISTRY_CODEC = nbt.NbtTag{
                                                             .{
                                                                 .tag_int = .{
                                                                     .identifier = "logical_height",
-                                                                    .value = 256,
+                                                                    .value = 384,
                                                                 },
                                                             },
                                                             .{
@@ -180,13 +180,13 @@ pub const BASIC_REGISTRY_CODEC = nbt.NbtTag{
                                                             .{
                                                                 .tag_int = .{
                                                                     .identifier = "height",
-                                                                    .value = 256,
+                                                                    .value = 384,
                                                                 },
                                                             },
                                                             .{
                                                                 .tag_int = .{
                                                                     .identifier = "min_y",
-                                                                    .value = 0,
+                                                                    .value = -64,
                                                                 },
                                                             },
                                                         },

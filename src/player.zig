@@ -32,7 +32,7 @@ pub const Player = struct {
             .name = try alloc.dupe(u8, name),
 
             .x = 0.0,
-            .y = 16.0,
+            .y = 80.0,
             .z = 0.0,
 
             .yaw = 0.0,
