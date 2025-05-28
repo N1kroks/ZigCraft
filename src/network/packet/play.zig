@@ -109,7 +109,7 @@ pub const S2CChunkDataPacket = struct {
         try writer.writeInt(i32, self.chunk.x, .big);
         try writer.writeInt(i32, self.chunk.z, .big);
 
-        var heightmap_data_array = try chunk.PackedDataArray.init(alloc, 9, 384);
+        var heightmap_data_array = try chunk.PackedDataArray.init(alloc, 9, 256);
         defer heightmap_data_array.deinit(alloc);
         var x: u32 = 0;
         while (x < 16) : (x += 1) {

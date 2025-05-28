@@ -3,6 +3,7 @@ const std = @import("std");
 const Chunk = @import("chunk/chunk.zig").Chunk;
 const TerrainGenerator = @import("terrain_generator.zig").TerrainGenerator;
 const network = @import("network/network.zig");
+const utils = @import("utils.zig");
 const Player = @import("player.zig").Player;
 const packet = network.packet;
 
@@ -53,14 +54,10 @@ pub const Server = struct {
         self.listener.deinit();
     }
 
-    fn chunkKey(x: i32, z: i32) u64 {
-        return (@as(u64, @as(u32, @bitCast(x))) << 32) | @as(u64, @as(u32, @bitCast(z)));
-    }
-
     fn generateChunk(self: *Server, x: i32, z: i32) !void {
         const chunk = try Chunk.init(self.alloc, x, z, 384);
         try self.terrain_generator.generateTerrain(chunk);
-        try self.chunks.put(chunkKey(x, z), chunk);
+        try self.chunks.put(utils.chunkKey(x, z), chunk);
     }
 
     fn generateSpawnChunks(self: *Server) !void {
@@ -89,45 +86,84 @@ pub const Server = struct {
         }
     }
 
-    fn updateChunksForPlayer(self: *Server, packet_writer: *packet.PacketWriter, writer: anytype, player: *Player) !void {
+    fn updateChunksForPlayer(self: *Server, packet_writer: *packet.PacketWriter, writer: anytype, player: *Player, initial_load: bool) !void {
+        var needed_chunks = std.ArrayList(u64).init(self.alloc);
+        defer needed_chunks.deinit();
+
         const chunk_x = player.chunkX();
         const chunk_z = player.chunkZ();
         const prev_chunk_x = player.prev_chunk_x;
         const prev_chunk_z = player.prev_chunk_z;
 
-        if (!(chunk_x == prev_chunk_x and chunk_z == prev_chunk_z)) {
+        if (!(chunk_x == prev_chunk_x and chunk_z == prev_chunk_z) or initial_load) {
             player.prev_chunk_x = chunk_x;
             player.prev_chunk_z = chunk_z;
 
-            const pkt = packet.S2CSetCenterChunk{
-                .chunk_x = .init(chunk_x),
-                .chunk_z = .init(chunk_z),
-            };
-            try packet_writer.write(writer, pkt);
-        }
-        const view_distance = 8; // TODO: Move to config
+            {
+                const pkt = packet.S2CSetCenterChunk{
+                    .chunk_x = .init(chunk_x),
+                    .chunk_z = .init(chunk_z),
+                };
+                try packet_writer.write(writer, pkt);
+            }
 
-        {
+            const view_distance = 8; // TODO: Move to config
+
             var x: i32 = chunk_x - view_distance;
             while (x <= chunk_x + view_distance) : (x += 1) {
                 var z: i32 = chunk_z - view_distance;
                 while (z <= chunk_z + view_distance) : (z += 1) {
-                    const key = chunkKey(x, z);
-                    if (!player.isChunkLoaded(x, z)) {
-                        if (!self.chunks.contains(key)) {
-                            try self.generateChunk(x, z);
-                        }
-
-                        const chunk = self.chunks.get(key) orelse continue;
-
-                        const pkt = packet.S2CChunkDataPacket{
-                            .chunk = chunk,
-                        };
-                        try packet_writer.write(writer, pkt);
-
-                        try player.markChunkLoaded(x, z);
-                    }
+                    const key = utils.chunkKey(x, z);
+                    try needed_chunks.append(key);
                 }
+            }
+
+            var needed_set = std.AutoHashMap(u64, void).init(self.alloc);
+            defer needed_set.deinit();
+
+            for (needed_chunks.items) |key| {
+                try needed_set.put(key, {});
+            }
+
+            var chunks_to_unload = std.ArrayList(u64).init(self.alloc);
+            defer chunks_to_unload.deinit();
+
+            var iterator = player.loaded_chunks.iterator();
+            while (iterator.next()) |entry| {
+                const key = entry.key_ptr.*;
+                if (!needed_set.contains(key)) {
+                    try chunks_to_unload.append(key);
+                }
+            }
+
+            for (chunks_to_unload.items) |key| {
+                const coords = utils.chunkKeyToCoords(key);
+                const pkt = packet.S2CUnloadChunkPacket{
+                    .chunk_x = coords.x,
+                    .chunk_z = coords.z,
+                };
+                try packet_writer.write(writer, pkt);
+                player.markChunkUnloadedByKey(key);
+            }
+
+            for (needed_chunks.items) |key| {
+                if (player.loaded_chunks.contains(key)) {
+                    continue;
+                }
+
+                if (!player.isChunkLoadedByKey(key)) {
+                    const coords = utils.chunkKeyToCoords(key);
+                    try self.generateChunk(coords.x, coords.z);
+                }
+
+                const chunk = self.chunks.get(key) orelse continue;
+
+                const pkt = packet.S2CChunkDataPacket{
+                    .chunk = chunk,
+                };
+                try packet_writer.write(writer, pkt);
+
+                try player.markChunkLoadedByKey(key);
             }
         }
     }
@@ -230,7 +266,7 @@ pub const Server = struct {
                                 try packet_writer.write(writer, spkt);
                             }
 
-                            try self.updateChunksForPlayer(&packet_writer, writer, &player);
+                            try self.updateChunksForPlayer(&packet_writer, writer, &player, true);
 
                             std.debug.print("Player {s} successfully joined game\n", .{pkt.username.data});
                         },
@@ -262,7 +298,7 @@ pub const Server = struct {
                             player.x = pkt.x;
                             player.y = pkt.y;
                             player.z = pkt.z;
-                            try self.updateChunksForPlayer(&packet_writer, writer, &player);
+                            try self.updateChunksForPlayer(&packet_writer, writer, &player, false);
                         },
                         packet.C2SPlayerPositionRotationPacket.PacketID => {
                             const pkt = try packet_reader.read(reader, packet.C2SPlayerPositionRotationPacket);
@@ -271,7 +307,7 @@ pub const Server = struct {
                             player.z = pkt.z;
                             player.yaw = pkt.yaw;
                             player.pitch = pkt.pitch;
-                            try self.updateChunksForPlayer(&packet_writer, writer, &player);
+                            try self.updateChunksForPlayer(&packet_writer, writer, &player, false);
                         },
                         packet.C2SPlayerRotationPacket.PacketID => {
                             const pkt = try packet_reader.read(reader, packet.C2SPlayerRotationPacket);

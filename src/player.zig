@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const game = @import("game/game.zig");
+const utils = @import("utils.zig");
 
 pub const Player = struct {
     id: i32,
@@ -52,27 +53,35 @@ pub const Player = struct {
         };
     }
 
-    fn chunkKey(x: i32, z: i32) u64 {
-        return (@as(u64, @as(u32, @bitCast(x))) << 32) | @as(u64, @as(u32, @bitCast(z)));
-    }
-
     pub fn deinit(self: *Player, alloc: std.mem.Allocator) void {
         alloc.free(self.name);
         self.loaded_chunks.deinit();
     }
 
     pub fn isChunkLoaded(self: *Player, x: i32, z: i32) bool {
-        const key = chunkKey(x, z);
+        const key = utils.chunkKey(x, z);
         return self.loaded_chunks.contains(key);
     }
 
     pub fn markChunkLoaded(self: *Player, x: i32, z: i32) !void {
-        const key = chunkKey(x, z);
+        const key = utils.chunkKey(x, z);
         try self.loaded_chunks.put(key, true);
     }
 
     pub fn markChunkUnloaded(self: *Player, x: i32, z: i32) void {
-        const key = chunkKey(x, z);
+        const key = utils.chunkKey(x, z);
+        _ = self.loaded_chunks.remove(key);
+    }
+
+    pub fn isChunkLoadedByKey(self: *Player, key: u64) bool {
+        return self.loaded_chunks.contains(key);
+    }
+
+    pub fn markChunkLoadedByKey(self: *Player, key: u64) !void {
+        try self.loaded_chunks.put(key, true);
+    }
+
+    pub fn markChunkUnloadedByKey(self: *Player, key: u64) void {
         _ = self.loaded_chunks.remove(key);
     }
 
