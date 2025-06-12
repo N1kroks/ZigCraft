@@ -237,9 +237,10 @@ pub const Server = struct {
                             const pkt = try packet_reader.read(reader, packet.C2SLoginStartPacket);
 
                             {
+                                const uuid = try std.fmt.allocPrint(self.alloc, "OfflinePlayer:{s}", .{pkt.username.data});
                                 const spkt = packet.S2CLoginSuccessPacket{
                                     .username = pkt.username,
-                                    .uuid = 0xDEADBEEFCAFEBABE, // TODO: Generate UUID
+                                    .uuid = packet.UUID.generate(uuid),
                                 };
                                 try packet_writer.write(writer, spkt);
 
@@ -279,7 +280,7 @@ pub const Server = struct {
                     if (now - player.last_keepalive_time >= KEEPALIVE_INTERVAL_MS) {
                         if (player.pending_keepalive and (now - player.last_keepalive_time >= KEEPALIVE_TIMEOUT_MS)) {
                             std.debug.print("Player {s} timed out\n", .{player.name});
-                            stream.close();
+                            break;
                         }
 
                         if (!player.pending_keepalive) {

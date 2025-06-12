@@ -15,7 +15,7 @@ pub const C2SLoginStartPacket = struct {
     signature: ?packet.ByteArray,
 
     has_player_uuid: bool,
-    player_uuid: ?u128,
+    player_uuid: ?packet.UUID,
 
     pub fn write(self: C2SLoginStartPacket, alloc: std.mem.Allocator, writer: anytype) !void {
         _ = self;
@@ -44,10 +44,10 @@ pub const C2SLoginStartPacket = struct {
 
         const has_player_uuid = try reader.readByte() == 1;
 
-        var player_uuid: ?u128 = null;
+        var player_uuid: ?packet.UUID = null;
 
         if (has_player_uuid) {
-            player_uuid = try reader.readInt(u128, .big);
+            player_uuid = try packet.UUID.read(reader);
         }
 
         return .{
@@ -69,7 +69,7 @@ pub const C2SLoginStartPacket = struct {
 pub const S2CLoginSuccessPacket = struct {
     pub const PacketID = 0x02;
 
-    uuid: u128 = undefined,
+    uuid: packet.UUID = undefined,
     username: packet.String = undefined,
 
     number_of_properties: packet.VarInt = .init(0),

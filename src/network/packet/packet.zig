@@ -33,8 +33,9 @@ pub const PacketReader = struct {
                 switch (T) {
                     types.VarInt => return types.VarInt.read(reader),
                     types.String => return types.String.read(self.alloc, reader),
+                    types.UUID => return types.UUID.read(reader),
                     else => {
-                        if (@hasDecl(T, "write")) {
+                        if (@hasDecl(T, "read")) {
                             return try @field(T, "read")(self.alloc, reader);
                         }
                         var packet: T = undefined;
@@ -83,6 +84,7 @@ pub const PacketWriter = struct {
                 switch (T) {
                     types.VarInt => try value.write(wr),
                     types.String => try value.write(wr),
+                    types.UUID => try value.write(wr),
                     else => {
                         var buff: ?std.ArrayList(u8) = null;
                         defer if (buff) |*b| b.deinit();

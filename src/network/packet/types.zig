@@ -91,3 +91,37 @@ pub const ByteArray = struct {
         return ByteArray.init(buf);
     }
 };
+
+pub const UUID = struct {
+    uuid: u128,
+
+    pub fn init(uuid: u128) UUID {
+        return .{ .uuid = uuid };
+    }
+
+    pub fn zero() UUID {
+        return .{ .uuid = 0 };
+    }
+
+    pub fn generate(string: []const u8) UUID {
+        var md5_bytes: [16]u8 = undefined;
+        std.crypto.hash.Md5.hash(string, &md5_bytes, .{});
+
+        md5_bytes[6] &= 0x0f;
+        md5_bytes[6] |= 0x30;
+
+        md5_bytes[8] &= 0x3f;
+        md5_bytes[8] |= 0x80;
+
+        return .{ .uuid = std.mem.readInt(u128, &md5_bytes, .big) };
+    }
+
+    pub fn write(self: UUID, writer: anytype) !void {
+        try writer.writeInt(u128, self.uuid, .big);
+    }
+
+    pub fn read(reader: anytype) !UUID {
+        const uuid = try reader.readInt(u128, .big);
+        return UUID.init(uuid);
+    }
+};
